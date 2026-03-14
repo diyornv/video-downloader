@@ -192,42 +192,74 @@ bot.on('message', async (msg) => {
                     return ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext);
                 }
 
+                // Faylni yuklab olib, Telegramga yuborish funksiyasi
+                async function downloadAndSend(fileUrl, filename, captionText) {
+                    const tmpDir = path.join(__dirname, 'tmp');
+                    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir);
+                    
+                    const safeName = filename || `file_${Date.now()}`;
+                    const filePath = path.join(tmpDir, safeName);
+                    
+                    // Faylni yuklab olish
+                    const fileResponse = await axios.get(fileUrl, {
+                        responseType: 'stream',
+                        timeout: 120000
+                    });
+                    
+                    const writer = fs.createWriteStream(filePath);
+                    fileResponse.data.pipe(writer);
+                    
+                    await new Promise((resolve, reject) => {
+                        writer.on('finish', resolve);
+                        writer.on('error', reject);
+                    });
+                    
+                    // Telegramga yuborish
+                    try {
+                        if (isImageFile(safeName)) {
+                            await bot.sendPhoto(chatId, filePath, {
+                                caption: captionText,
+                                parse_mode: 'HTML'
+                            });
+                        } else {
+                            await bot.sendVideo(chatId, filePath, {
+                                caption: captionText,
+                                parse_mode: 'HTML'
+                            });
+                        }
+                    } finally {
+                        // Faylni o'chirish
+                        try { fs.unlinkSync(filePath); } catch (e) {}
+                    }
+                }
+
                 // Natija muvaffaqiyatli bo'lsa
-                if (data.status === 'redirect' || data.status === 'tunnel') {
+                if (data.status === 'redirect') {
+                    // Redirect — to'g'ridan-to'g'ri public URL, Telegram o'zi yuklay oladi
                     if (isImageFile(data.filename)) {
-                        // Rasm yuborish
                         await bot.sendPhoto(chatId, data.url, {
                             caption: caption,
                             parse_mode: 'HTML'
                         });
                     } else {
-                        // Video yuborish
                         await bot.sendVideo(chatId, data.url, {
                             caption: caption,
                             parse_mode: 'HTML'
                         });
                     }
+                } else if (data.status === 'tunnel') {
+                    // Tunnel — cobalt server orqali, avval yuklab keyin yuborish kerak
+                    await downloadAndSend(data.url, data.filename, caption);
                 } else if (data.status === 'picker' && data.picker) {
                     // Bir nechta rasm/video — hammasini yuborish
                     let sent = 0;
                     for (const item of data.picker) {
                         try {
-                            if (item.type === 'photo') {
-                                await bot.sendPhoto(chatId, item.url, {
-                                    caption: sent === 0 ? caption : '',
-                                    parse_mode: 'HTML'
-                                });
-                            } else if (item.type === 'gif') {
-                                await bot.sendAnimation(chatId, item.url, {
-                                    caption: sent === 0 ? caption : '',
-                                    parse_mode: 'HTML'
-                                });
-                            } else {
-                                await bot.sendVideo(chatId, item.url, {
-                                    caption: sent === 0 ? caption : '',
-                                    parse_mode: 'HTML'
-                                });
-                            }
+                            const itemFilename = `picker_${Date.now()}_${sent}${item.type === 'photo' ? '.jpg' : '.mp4'}`;
+                            const itemCaption = sent === 0 ? caption : '';
+                            
+                            // Picker itemlar ham tunnel orqali keladi
+                            await downloadAndSend(item.url, itemFilename, itemCaption);
                             sent++;
                         } catch (itemErr) {
                             console.error("Picker item yuborishda xato:", itemErr.message);
