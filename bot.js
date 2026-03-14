@@ -178,25 +178,73 @@ bot.on('message', async (msg) => {
                     headers: {
                         'Accept': 'application/json',
                         'Content-Type': 'application/json'
-                    }
+                    },
+                    timeout: 30000
                 });
 
                 const data = response.data;
+                const caption = '<a href="https://t.me/pinterest_downloader_uzbot">pinterest_downloader_uzbot</a> dan yuklandi';
+
+                // Media turini aniqlash funksiyasi
+                function isImageFile(filename) {
+                    if (!filename) return false;
+                    const ext = filename.split('.').pop().toLowerCase();
+                    return ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext);
+                }
 
                 // Natija muvaffaqiyatli bo'lsa
-                if (data.status === 'redirect' || data.status === 'tunnel' || data.status === 'success') {
-                    // Video tagiga yashirin ssilka bilan yozuv qo'shish
-                    await bot.sendVideo(chatId, data.url, {
-                        caption: 'Video <a href="https://t.me/pinterest_downloader_uzbot">pinterest_downloader_uzbot</a> dan yuklandi',
-                        parse_mode: 'HTML'
-                    });
-                } else if (data.status === 'picker') {
-                    bot.sendMessage(chatId, "Bu linkda bir nechta rasm/video bor ekan. Hozircha faqat bittalik videolarni yuklay olaman.");
+                if (data.status === 'redirect' || data.status === 'tunnel') {
+                    if (isImageFile(data.filename)) {
+                        // Rasm yuborish
+                        await bot.sendPhoto(chatId, data.url, {
+                            caption: caption,
+                            parse_mode: 'HTML'
+                        });
+                    } else {
+                        // Video yuborish
+                        await bot.sendVideo(chatId, data.url, {
+                            caption: caption,
+                            parse_mode: 'HTML'
+                        });
+                    }
+                } else if (data.status === 'picker' && data.picker) {
+                    // Bir nechta rasm/video — hammasini yuborish
+                    let sent = 0;
+                    for (const item of data.picker) {
+                        try {
+                            if (item.type === 'photo') {
+                                await bot.sendPhoto(chatId, item.url, {
+                                    caption: sent === 0 ? caption : '',
+                                    parse_mode: 'HTML'
+                                });
+                            } else if (item.type === 'gif') {
+                                await bot.sendAnimation(chatId, item.url, {
+                                    caption: sent === 0 ? caption : '',
+                                    parse_mode: 'HTML'
+                                });
+                            } else {
+                                await bot.sendVideo(chatId, item.url, {
+                                    caption: sent === 0 ? caption : '',
+                                    parse_mode: 'HTML'
+                                });
+                            }
+                            sent++;
+                        } catch (itemErr) {
+                            console.error("Picker item yuborishda xato:", itemErr.message);
+                        }
+                    }
+                    if (sent === 0) {
+                        bot.sendMessage(chatId, "Fayllarni yuklab olishda muammo yuzaga keldi.");
+                    }
                 } else {
+                    console.error("Noma'lum API javobi:", JSON.stringify(data));
                     bot.sendMessage(chatId, "Faylni yuklab olishda muammo yuzaga keldi.");
                 }
             } catch (error) {
                 console.error("API Xatosi:", error.message);
+                if (error.response) {
+                    console.error("Server javobi:", JSON.stringify(error.response.data));
+                }
                 bot.sendMessage(chatId, "Server bilan ulanishda xatolik yuz berdi. Iltimos keyinroq qayta urinib ko'ring.");
             }
         } else {
