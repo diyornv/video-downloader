@@ -186,7 +186,13 @@ async function downloadAndSend(chatId, fileUrl, filename, captionText) {
     const tmpDir = path.join(__dirname, 'tmp');
     if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir);
 
-    const safeName = filename || `file_${Date.now()}`;
+    let safeName = filename || `file_${Date.now()}`;
+    
+    // Telegram videolarni hujjat (fayl) emas, video sifatida ko'rishi uchun .mp4 qo'shamiz
+    if (!isImageFile(safeName) && !safeName.match(/\.(mp4|webm|mov|mkv)$/i)) {
+        safeName += '.mp4';
+    }
+
     const filePath = path.join(tmpDir, safeName);
 
     // Faylni yuklab olish
