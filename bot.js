@@ -111,21 +111,39 @@ bot.on('message', async (msg) => {
     // Foydalanuvchini saqlash
     saveUser(chatId);
 
-    // Admin post rejimida
-    if (isAdmin(userId) && postMode.has(userId)) {
-        // Bekor qilish
+    // Admin komandalarini tekshirish (postMode dan oldin)
+    if (isAdmin(userId)) {
+        // "Bekor qilish" — har doim ishlaydi, postMode ga bog'liq emas
         if (text === '❌ Bekor qilish') {
             postMode.delete(userId);
             return bot.sendMessage(chatId, "✅ Post bekor qilindi.", getAdminKeyboard());
         }
 
-        // Postni yuborish
-        postMode.delete(userId);
-        const result = await broadcast(msg);
-        return bot.sendMessage(chatId,
-            `✅ Post yuborildi!\n\n📊 Natija:\n👥 Muvaffaqiyatli: ${result.success}\n❌ Xatolik: ${result.fail}`,
-            getAdminKeyboard()
-        );
+        // "Post" tugmasi
+        if (text === '📢 Post') {
+            postMode.add(userId);
+            const users = loadUsers();
+            return bot.sendMessage(chatId,
+                `📢 Post rejimi yoqildi!\n\n👥 Jami foydalanuvchilar: ${users.length}\n\nPostni yuboring (matn, rasm, video, fayl).\n❌ Bekor qilish uchun tugmani bosing.`,
+                getPostKeyboard()
+            );
+        }
+
+        // /stats komandasi
+        if (text === '/stats') {
+            const users = loadUsers();
+            return bot.sendMessage(chatId, `📊 Statistika:\n👥 Jami foydalanuvchilar: ${users.length}`, getAdminKeyboard());
+        }
+
+        // Post rejimida — xabarni broadcast qilish
+        if (postMode.has(userId)) {
+            postMode.delete(userId);
+            const result = await broadcast(msg);
+            return bot.sendMessage(chatId,
+                `✅ Post yuborildi!\n\n📊 Natija:\n👥 Muvaffaqiyatli: ${result.success}\n❌ Xatolik: ${result.fail}`,
+                getAdminKeyboard()
+            );
+        }
     }
 
     // /start komandasi
@@ -137,22 +155,6 @@ bot.on('message', async (msg) => {
             );
         }
         return bot.sendMessage(chatId, "Salom! Menga Instagram, TikTok, Pinterest yoki YouTube linkini yuboring.");
-    }
-
-    // Admin "Post" tugmasini bosdi
-    if (isAdmin(userId) && text === '📢 Post') {
-        postMode.add(userId);
-        const users = loadUsers();
-        return bot.sendMessage(chatId,
-            `📢 Post rejimi yoqildi!\n\n👥 Jami foydalanuvchilar: ${users.length}\n\nPostni yuboring (matn, rasm, video, fayl).\n❌ Bekor qilish uchun tugmani bosing.`,
-            getPostKeyboard()
-        );
-    }
-
-    // Admin /stats komandasi
-    if (isAdmin(userId) && text === '/stats') {
-        const users = loadUsers();
-        return bot.sendMessage(chatId, `📊 Statistika:\n👥 Jami foydalanuvchilar: ${users.length}`, getAdminKeyboard());
     }
 
     if (!text) return;
