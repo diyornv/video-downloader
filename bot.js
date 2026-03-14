@@ -1,23 +1,161 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 
 // Token .env faylidan olinadi
 const token = process.env.TELEGRAM_TOKEN;
+const ADMIN_ID = parseInt(process.env.ADMIN_ID);
 const bot = new TelegramBot(token, { polling: true });
 
 // Sizning shaxsiy serveringizdagi Cobalt API manzili
 const COBALT_API_URL = 'http://178.128.199.137:9000/';
 
+// Users faylini saqlash
+const USERS_FILE = path.join(__dirname, 'users.json');
+
+// Post rejimida turgan adminlar
+const postMode = new Set();
+
+// Foydalanuvchilarni yuklash
+function loadUsers() {
+    try {
+        const data = fs.readFileSync(USERS_FILE, 'utf8');
+        return JSON.parse(data);
+    } catch (err) {
+        return [];
+    }
+}
+
+// Foydalanuvchini saqlash
+function saveUser(chatId) {
+    const users = loadUsers();
+    if (!users.includes(chatId)) {
+        users.push(chatId);
+        fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
+    }
+}
+
+// Admin tekshirish
+function isAdmin(userId) {
+    return userId === ADMIN_ID;
+}
+
+// Admin uchun klaviatura
+function getAdminKeyboard() {
+    return {
+        reply_markup: {
+            keyboard: [
+                [{ text: '📢 Post' }],
+            ],
+            resize_keyboard: true
+        }
+    };
+}
+
+// Post rejimidagi klaviatura
+function getPostKeyboard() {
+    return {
+        reply_markup: {
+            keyboard: [
+                [{ text: '❌ Bekor qilish' }],
+            ],
+            resize_keyboard: true
+        }
+    };
+}
+
+// Barcha foydalanuvchilarga xabar yuborish (broadcast)
+async function broadcast(msg) {
+    const users = loadUsers();
+    let success = 0;
+    let fail = 0;
+
+    for (const chatId of users) {
+        try {
+            if (msg.text) {
+                await bot.sendMessage(chatId, msg.text);
+            } else if (msg.photo) {
+                const photo = msg.photo[msg.photo.length - 1].file_id;
+                await bot.sendPhoto(chatId, photo, { caption: msg.caption || '' });
+            } else if (msg.video) {
+                await bot.sendVideo(chatId, msg.video.file_id, { caption: msg.caption || '' });
+            } else if (msg.document) {
+                await bot.sendDocument(chatId, msg.document.file_id, { caption: msg.caption || '' });
+            } else if (msg.animation) {
+                await bot.sendAnimation(chatId, msg.animation.file_id, { caption: msg.caption || '' });
+            } else if (msg.sticker) {
+                await bot.sendSticker(chatId, msg.sticker.file_id);
+            } else if (msg.voice) {
+                await bot.sendVoice(chatId, msg.voice.file_id, { caption: msg.caption || '' });
+            } else if (msg.audio) {
+                await bot.sendAudio(chatId, msg.audio.file_id, { caption: msg.caption || '' });
+            } else if (msg.video_note) {
+                await bot.sendVideoNote(chatId, msg.video_note.file_id);
+            }
+            success++;
+        } catch (err) {
+            fail++;
+        }
+    }
+
+    return { success, fail };
+}
+
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
+    const userId = msg.from.id;
     const text = msg.text;
 
-    if (!text) return;
+    // Foydalanuvchini saqlash
+    saveUser(chatId);
 
+    // Admin post rejimida
+    if (isAdmin(userId) && postMode.has(userId)) {
+        // Bekor qilish
+        if (text === '❌ Bekor qilish') {
+            postMode.delete(userId);
+            return bot.sendMessage(chatId, "✅ Post bekor qilindi.", getAdminKeyboard());
+        }
+
+        // Postni yuborish
+        postMode.delete(userId);
+        const result = await broadcast(msg);
+        return bot.sendMessage(chatId,
+            `✅ Post yuborildi!\n\n📊 Natija:\n👥 Muvaffaqiyatli: ${result.success}\n❌ Xatolik: ${result.fail}`,
+            getAdminKeyboard()
+        );
+    }
+
+    // /start komandasi
     if (text === '/start') {
+        if (isAdmin(userId)) {
+            return bot.sendMessage(chatId,
+                "Salom Admin! 👋\nMenga Instagram, TikTok, Pinterest yoki YouTube linkini yuboring.\n\n📢 Post tugmasini bosib barcha foydalanuvchilarga xabar yuborishingiz mumkin.",
+                getAdminKeyboard()
+            );
+        }
         return bot.sendMessage(chatId, "Salom! Menga Instagram, TikTok, Pinterest yoki YouTube linkini yuboring.");
     }
+
+    // Admin "Post" tugmasini bosdi
+    if (isAdmin(userId) && text === '📢 Post') {
+        postMode.add(userId);
+        const users = loadUsers();
+        return bot.sendMessage(chatId,
+            `📢 Post rejimi yoqildi!\n\n👥 Jami foydalanuvchilar: ${users.length}\n\nPostni yuboring (matn, rasm, video, fayl).\n❌ Bekor qilish uchun tugmani bosing.`,
+            getPostKeyboard()
+        );
+    }
+
+    // Admin /stats komandasi
+    if (isAdmin(userId) && text === '/stats') {
+        const users = loadUsers();
+        return bot.sendMessage(chatId, `📊 Statistika:\n👥 Jami foydalanuvchilar: ${users.length}`, getAdminKeyboard());
+    }
+
+    if (!text) return;
 
     if (text.startsWith('http://') || text.startsWith('https://')) {
 
