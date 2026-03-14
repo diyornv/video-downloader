@@ -2,7 +2,7 @@ require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 
-// Token endi .env faylidan olinadi
+// Token .env faylidan olinadi
 const token = process.env.TELEGRAM_TOKEN;
 const bot = new TelegramBot(token, { polling: true });
 
@@ -21,10 +21,12 @@ bot.on('message', async (msg) => {
 
     if (text.startsWith('http://') || text.startsWith('https://')) {
 
+        // 1. YouTube cheklovi
         if (text.includes('youtube.com') || text.includes('youtu.be')) {
-            return bot.sendMessage(chatId, "Hozirda ytdan yuklash cheklangan, ishlashi bilan habar beramiz.");
+            return bot.sendMessage(chatId, "Hozirda YouTube'dan yuklash cheklangan, ishlashi bilan habar beramiz.");
         }
 
+        // 2. Ruxsat berilgan platformalar
         if (text.includes('instagram.com') || text.includes('tiktok.com') || text.includes('vm.tiktok.com') || text.includes('pinterest.com') || text.includes('pin.it')) {
 
             bot.sendMessage(chatId, "Kuting, yuklanmoqda... ⏳");
@@ -41,10 +43,15 @@ bot.on('message', async (msg) => {
 
                 const data = response.data;
 
+                // Natija muvaffaqiyatli bo'lsa
                 if (data.status === 'redirect' || data.status === 'tunnel' || data.status === 'success') {
-                    await bot.sendVideo(chatId, data.url);
+                    // Video tagiga yashirin ssilka bilan yozuv qo'shish
+                    await bot.sendVideo(chatId, data.url, {
+                        caption: 'Video <a href="https://t.me/pinterest_downloader_uzbot">pinterest_downloader_uzbot</a> dan yuklandi',
+                        parse_mode: 'HTML'
+                    });
                 } else if (data.status === 'picker') {
-                    bot.sendMessage(chatId, "Bu linkda bir nechta rasm/video bor ekan. Buni ham tez orada to'g'rilaymiz.");
+                    bot.sendMessage(chatId, "Bu linkda bir nechta rasm/video bor ekan. Hozircha faqat bittalik videolarni yuklay olaman.");
                 } else {
                     bot.sendMessage(chatId, "Faylni yuklab olishda muammo yuzaga keldi.");
                 }
