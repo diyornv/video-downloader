@@ -201,7 +201,7 @@ bot.on('message', async (msg) => {
             bot.sendMessage(chatId, "Men faqat Instagram, TikTok, Pinterest va YouTube linklarini qabul qilaman.");
         }
     } else {
-        bot.sendMessage(chatId, "Iltimos, faqat link yuboring.");
+        bot.sendMessage(chatId, "Iltimos, faqat link yuboring!");
     }
 });
 
