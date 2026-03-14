@@ -234,22 +234,23 @@ bot.on('message', async (msg) => {
                 }
 
                 // Natija muvaffaqiyatli bo'lsa
-                if (data.status === 'redirect') {
-                    // Redirect — to'g'ridan-to'g'ri public URL, Telegram o'zi yuklay oladi
+                if (data.status === 'redirect' || data.status === 'tunnel') {
                     if (isImageFile(data.filename)) {
-                        await bot.sendPhoto(chatId, data.url, {
-                            caption: caption,
-                            parse_mode: 'HTML'
-                        });
+                        // Rasmlar kichik — to'g'ridan-to'g'ri URL orqali yuborish mumkin
+                        try {
+                            await bot.sendPhoto(chatId, data.url, {
+                                caption: caption,
+                                parse_mode: 'HTML'
+                            });
+                        } catch (directErr) {
+                            // Agar URL orqali yuborib bo'lmasa, yuklab yuborish
+                            console.error("To'g'ridan-to'g'ri yuborishda xato, yuklab yuborilmoqda:", directErr.message);
+                            await downloadAndSend(data.url, data.filename, caption);
+                        }
                     } else {
-                        await bot.sendVideo(chatId, data.url, {
-                            caption: caption,
-                            parse_mode: 'HTML'
-                        });
+                        // Videolar katta bo'lishi mumkin — har doim yuklab keyin yuborish
+                        await downloadAndSend(data.url, data.filename, caption);
                     }
-                } else if (data.status === 'tunnel') {
-                    // Tunnel — cobalt server orqali, avval yuklab keyin yuborish kerak
-                    await downloadAndSend(data.url, data.filename, caption);
                 } else if (data.status === 'picker' && data.picker) {
                     // Bir nechta rasm/video — hammasini yuklab olib, media group qilib yuborish
                     const tmpDir = path.join(__dirname, 'tmp');
