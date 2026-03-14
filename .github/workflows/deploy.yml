@@ -1,0 +1,12 @@
+steps:
+      - name: Deploy to DigitalOcean
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            cd /root/video-downloader-bot
+            git pull origin main
+            npm install
+            pm2 restart downloader-bot
