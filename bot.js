@@ -18,24 +18,62 @@ const USERS_FILE = path.join(__dirname, 'users.json');
 // Post rejimida turgan adminlar
 const postMode = new Set();
 
-// Foydalanuvchilarni yuklash
+// ==================== FOYDALANUVCHILAR BOSHQARUVI ====================
+
+// Foydalanuvchilarni yuklash (avtomatik migratsiya bilan)
 function loadUsers() {
     try {
         const data = fs.readFileSync(USERS_FILE, 'utf8');
-        return JSON.parse(data);
+        const parsed = JSON.parse(data);
+
+        // Eski formatdan yangi formatga migratsiya: [123] → [{id: 123, status: "active"}]
+        if (parsed.length > 0 && typeof parsed[0] === 'number') {
+            const migrated = parsed.map(id => ({ id, status: 'active' }));
+            fs.writeFileSync(USERS_FILE, JSON.stringify(migrated, null, 2));
+            console.log(`✅ ${migrated.length} ta foydalanuvchi yangi formatga migrate qilindi.`);
+            return migrated;
+        }
+
+        return parsed;
     } catch (err) {
         return [];
     }
 }
 
-// Foydalanuvchini saqlash
+// Foydalanuvchini saqlash (yangi format)
 function saveUser(chatId) {
     const users = loadUsers();
-    if (!users.includes(chatId)) {
-        users.push(chatId);
+    const existing = users.find(u => u.id === chatId);
+    if (!existing) {
+        users.push({ id: chatId, status: 'active' });
+        fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
+    } else if (existing.status === 'blocked') {
+        // Agar oldin bloklagan bo'lsa va endi qayta yozsa — active qilish
+        existing.status = 'active';
         fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
     }
 }
+
+// Foydalanuvchi statusini yangilash
+function updateUserStatus(chatId, status) {
+    const users = loadUsers();
+    const user = users.find(u => u.id === chatId);
+    if (user) {
+        user.status = status;
+        fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
+    }
+}
+
+// Statistikani olish
+function getStats() {
+    const users = loadUsers();
+    const total = users.length;
+    const active = users.filter(u => u.status === 'active').length;
+    const blocked = users.filter(u => u.status === 'blocked').length;
+    return { total, active, blocked };
+}
+
+// ==================== ADMIN FUNKSIYALARI ====================
 
 // Admin tekshirish
 function isAdmin(userId) {
@@ -47,7 +85,7 @@ function getAdminKeyboard() {
     return {
         reply_markup: {
             keyboard: [
-                [{ text: '📢 Post' }],
+                [{ text: '📢 Post' }, { text: '📊 Statistika' }],
             ],
             resize_keyboard: true
         }
@@ -66,42 +104,125 @@ function getPostKeyboard() {
     };
 }
 
-// Barcha foydalanuvchilarga xabar yuborish (broadcast)
+// Barcha faol foydalanuvchilarga xabar yuborish (broadcast)
 async function broadcast(msg) {
     const users = loadUsers();
+    const activeUsers = users.filter(u => u.status === 'active');
     let success = 0;
     let fail = 0;
+    let newBlocked = 0;
 
-    for (const chatId of users) {
+    for (const user of activeUsers) {
         try {
             if (msg.text) {
-                await bot.sendMessage(chatId, msg.text);
+                await bot.sendMessage(user.id, msg.text);
             } else if (msg.photo) {
                 const photo = msg.photo[msg.photo.length - 1].file_id;
-                await bot.sendPhoto(chatId, photo, { caption: msg.caption || '' });
+                await bot.sendPhoto(user.id, photo, { caption: msg.caption || '' });
             } else if (msg.video) {
-                await bot.sendVideo(chatId, msg.video.file_id, { caption: msg.caption || '' });
+                await bot.sendVideo(user.id, msg.video.file_id, { caption: msg.caption || '' });
             } else if (msg.document) {
-                await bot.sendDocument(chatId, msg.document.file_id, { caption: msg.caption || '' });
+                await bot.sendDocument(user.id, msg.document.file_id, { caption: msg.caption || '' });
             } else if (msg.animation) {
-                await bot.sendAnimation(chatId, msg.animation.file_id, { caption: msg.caption || '' });
+                await bot.sendAnimation(user.id, msg.animation.file_id, { caption: msg.caption || '' });
             } else if (msg.sticker) {
-                await bot.sendSticker(chatId, msg.sticker.file_id);
+                await bot.sendSticker(user.id, msg.sticker.file_id);
             } else if (msg.voice) {
-                await bot.sendVoice(chatId, msg.voice.file_id, { caption: msg.caption || '' });
+                await bot.sendVoice(user.id, msg.voice.file_id, { caption: msg.caption || '' });
             } else if (msg.audio) {
-                await bot.sendAudio(chatId, msg.audio.file_id, { caption: msg.caption || '' });
+                await bot.sendAudio(user.id, msg.audio.file_id, { caption: msg.caption || '' });
             } else if (msg.video_note) {
-                await bot.sendVideoNote(chatId, msg.video_note.file_id);
+                await bot.sendVideoNote(user.id, msg.video_note.file_id);
             }
             success++;
         } catch (err) {
             fail++;
+            // 403 Forbidden — foydalanuvchi botni bloklagan
+            if (err.response && err.response.statusCode === 403) {
+                updateUserStatus(user.id, 'blocked');
+                newBlocked++;
+            }
         }
     }
 
-    return { success, fail };
+    return { success, fail, newBlocked };
 }
+
+// Matn broadcast (faqat /send uchun)
+async function broadcastText(text) {
+    const users = loadUsers();
+    const activeUsers = users.filter(u => u.status === 'active');
+    let success = 0;
+    let fail = 0;
+    let newBlocked = 0;
+
+    for (const user of activeUsers) {
+        try {
+            await bot.sendMessage(user.id, text, { parse_mode: 'HTML' });
+            success++;
+        } catch (err) {
+            fail++;
+            if (err.response && err.response.statusCode === 403) {
+                updateUserStatus(user.id, 'blocked');
+                newBlocked++;
+            }
+        }
+    }
+
+    return { success, fail, newBlocked };
+}
+
+// ==================== MEDIA YORDAMCHI FUNKSIYALAR ====================
+
+// Media turini aniqlash
+function isImageFile(filename) {
+    if (!filename) return false;
+    const ext = filename.split('.').pop().toLowerCase();
+    return ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext);
+}
+
+// Faylni yuklab olib, Telegramga yuborish
+async function downloadAndSend(chatId, fileUrl, filename, captionText) {
+    const tmpDir = path.join(__dirname, 'tmp');
+    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir);
+
+    const safeName = filename || `file_${Date.now()}`;
+    const filePath = path.join(tmpDir, safeName);
+
+    // Faylni yuklab olish
+    const fileResponse = await axios.get(fileUrl, {
+        responseType: 'stream',
+        timeout: 120000
+    });
+
+    const writer = fs.createWriteStream(filePath);
+    fileResponse.data.pipe(writer);
+
+    await new Promise((resolve, reject) => {
+        writer.on('finish', resolve);
+        writer.on('error', reject);
+    });
+
+    // Telegramga yuborish
+    try {
+        if (isImageFile(safeName)) {
+            await bot.sendPhoto(chatId, filePath, {
+                caption: captionText,
+                parse_mode: 'HTML'
+            });
+        } else {
+            await bot.sendVideo(chatId, filePath, {
+                caption: captionText,
+                parse_mode: 'HTML'
+            });
+        }
+    } finally {
+        // Faylni o'chirish
+        try { fs.unlinkSync(filePath); } catch (e) {}
+    }
+}
+
+// ==================== BOT XABAR HANDLER ====================
 
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
@@ -111,46 +232,66 @@ bot.on('message', async (msg) => {
     // Foydalanuvchini saqlash
     saveUser(chatId);
 
-    // Admin komandalarini tekshirish (postMode dan oldin)
+    // ---- ADMIN KOMANDALAR ----
     if (isAdmin(userId)) {
-        // "Bekor qilish" — har doim ishlaydi, postMode ga bog'liq emas
+        // "Bekor qilish" — har doim ishlaydi
         if (text === '❌ Bekor qilish') {
             postMode.delete(userId);
             return bot.sendMessage(chatId, "✅ Post bekor qilindi.", getAdminKeyboard());
         }
 
-        // "Post" tugmasi
-        if (text === '📢 Post') {
-            postMode.add(userId);
-            const users = loadUsers();
+        // "📊 Statistika" tugmasi yoki /stat komandasi
+        if (text === '📊 Statistika' || text === '/stat' || text === '/stats') {
+            const stats = getStats();
             return bot.sendMessage(chatId,
-                `📢 Post rejimi yoqildi!\n\n👥 Jami foydalanuvchilar: ${users.length}\n\nPostni yuboring (matn, rasm, video, fayl).\n❌ Bekor qilish uchun tugmani bosing.`,
-                getPostKeyboard()
+                `📊 Statistika:\n\n👥 Jami: ${stats.total}\n✅ Faol: ${stats.active}\n🚫 Bloklagan: ${stats.blocked}`,
+                getAdminKeyboard()
             );
         }
 
-        // /stats komandasi
-        if (text === '/stats') {
-            const users = loadUsers();
-            return bot.sendMessage(chatId, `📊 Statistika:\n👥 Jami foydalanuvchilar: ${users.length}`, getAdminKeyboard());
+        // /send komandasi
+        if (text && text.startsWith('/send ')) {
+            const sendText = text.slice(6).trim();
+            if (!sendText) {
+                return bot.sendMessage(chatId, "❌ Matn kiriting: /send [matn]", getAdminKeyboard());
+            }
+            const statusMsg = await bot.sendMessage(chatId, "📤 Xabar tarqatilmoqda...");
+            const result = await broadcastText(sendText);
+            await bot.editMessageText(
+                `✅ Xabar tarqatildi!\n\n📊 Natija:\n✅ Muvaffaqiyatli: ${result.success}\n❌ Xatolik: ${result.fail}\n🚫 Yangi bloklagan: ${result.newBlocked}`,
+                { chat_id: chatId, message_id: statusMsg.message_id }
+            );
+            return;
+        }
+
+        // "📢 Post" tugmasi
+        if (text === '📢 Post') {
+            postMode.add(userId);
+            const stats = getStats();
+            return bot.sendMessage(chatId,
+                `📢 Post rejimi yoqildi!\n\n👥 Faol foydalanuvchilar: ${stats.active}\n🚫 Bloklagan: ${stats.blocked}\n\nPostni yuboring (matn, rasm, video, fayl).\n❌ Bekor qilish uchun tugmani bosing.`,
+                getPostKeyboard()
+            );
         }
 
         // Post rejimida — xabarni broadcast qilish
         if (postMode.has(userId)) {
             postMode.delete(userId);
+            const statusMsg = await bot.sendMessage(chatId, "📤 Post tarqatilmoqda...");
             const result = await broadcast(msg);
-            return bot.sendMessage(chatId,
-                `✅ Post yuborildi!\n\n📊 Natija:\n👥 Muvaffaqiyatli: ${result.success}\n❌ Xatolik: ${result.fail}`,
-                getAdminKeyboard()
+            await bot.editMessageText(
+                `✅ Post yuborildi!\n\n📊 Natija:\n✅ Muvaffaqiyatli: ${result.success}\n❌ Xatolik: ${result.fail}\n🚫 Yangi bloklagan: ${result.newBlocked}`,
+                { chat_id: chatId, message_id: statusMsg.message_id }
             );
+            return bot.sendMessage(chatId, "Davom eting:", getAdminKeyboard());
         }
     }
 
-    // /start komandasi
+    // ---- /start KOMANDASI ----
     if (text === '/start') {
         if (isAdmin(userId)) {
             return bot.sendMessage(chatId,
-                "Salom Admin! 👋\nMenga Instagram, TikTok, Pinterest yoki YouTube linkini yuboring.\n\n📢 Post tugmasini bosib barcha foydalanuvchilarga xabar yuborishingiz mumkin.",
+                "Salom Admin! 👋\nMenga Instagram, TikTok, Pinterest yoki YouTube linkini yuboring.\n\n📢 Post — barcha foydalanuvchilarga xabar\n📊 Statistika — foydalanuvchilar soni\n/send [matn] — matn tarqatish",
                 getAdminKeyboard()
             );
         }
@@ -159,6 +300,7 @@ bot.on('message', async (msg) => {
 
     if (!text) return;
 
+    // ---- LINK QAYTA ISHLASH ----
     if (text.startsWith('http://') || text.startsWith('https://')) {
 
         // 1. YouTube cheklovi
@@ -185,99 +327,50 @@ bot.on('message', async (msg) => {
                 const data = response.data;
                 const caption = '<a href="https://t.me/pinterest_downloader_uzbot">pinterest_downloader_uzbot</a> dan yuklandi';
 
-                // Media turini aniqlash funksiyasi
-                function isImageFile(filename) {
-                    if (!filename) return false;
-                    const ext = filename.split('.').pop().toLowerCase();
-                    return ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext);
-                }
-
-                // Faylni yuklab olib, Telegramga yuborish funksiyasi
-                async function downloadAndSend(fileUrl, filename, captionText) {
-                    const tmpDir = path.join(__dirname, 'tmp');
-                    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir);
-                    
-                    const safeName = filename || `file_${Date.now()}`;
-                    const filePath = path.join(tmpDir, safeName);
-                    
-                    // Faylni yuklab olish
-                    const fileResponse = await axios.get(fileUrl, {
-                        responseType: 'stream',
-                        timeout: 120000
-                    });
-                    
-                    const writer = fs.createWriteStream(filePath);
-                    fileResponse.data.pipe(writer);
-                    
-                    await new Promise((resolve, reject) => {
-                        writer.on('finish', resolve);
-                        writer.on('error', reject);
-                    });
-                    
-                    // Telegramga yuborish
-                    try {
-                        if (isImageFile(safeName)) {
-                            await bot.sendPhoto(chatId, filePath, {
-                                caption: captionText,
-                                parse_mode: 'HTML'
-                            });
-                        } else {
-                            await bot.sendVideo(chatId, filePath, {
-                                caption: captionText,
-                                parse_mode: 'HTML'
-                            });
-                        }
-                    } finally {
-                        // Faylni o'chirish
-                        try { fs.unlinkSync(filePath); } catch (e) {}
-                    }
-                }
-
                 // Natija muvaffaqiyatli bo'lsa
                 if (data.status === 'redirect' || data.status === 'tunnel') {
                     if (isImageFile(data.filename)) {
-                        // Rasmlar kichik — to'g'ridan-to'g'ri URL orqali yuborish mumkin
+                        // Rasmlar — to'g'ridan-to'g'ri URL orqali yuborish
                         try {
                             await bot.sendPhoto(chatId, data.url, {
                                 caption: caption,
                                 parse_mode: 'HTML'
                             });
                         } catch (directErr) {
-                            // Agar URL orqali yuborib bo'lmasa, yuklab yuborish
-                            console.error("To'g'ridan-to'g'ri yuborishda xato, yuklab yuborilmoqda:", directErr.message);
-                            await downloadAndSend(data.url, data.filename, caption);
+                            console.error("URL orqali yuborishda xato, yuklab yuborilmoqda:", directErr.message);
+                            await downloadAndSend(chatId, data.url, data.filename, caption);
                         }
                     } else {
-                        // Videolar katta bo'lishi mumkin — har doim yuklab keyin yuborish
-                        await downloadAndSend(data.url, data.filename, caption);
+                        // Videolar — har doim yuklab keyin yuborish
+                        await downloadAndSend(chatId, data.url, data.filename, caption);
                     }
                 } else if (data.status === 'picker' && data.picker) {
                     // Bir nechta rasm/video — hammasini yuklab olib, media group qilib yuborish
                     const tmpDir = path.join(__dirname, 'tmp');
                     if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir);
-                    
+
                     const downloadedFiles = [];
-                    
+
                     for (let i = 0; i < data.picker.length; i++) {
                         const item = data.picker[i];
                         try {
                             const ext = item.type === 'photo' ? '.jpg' : '.mp4';
                             const itemFilename = `picker_${Date.now()}_${i}${ext}`;
                             const filePath = path.join(tmpDir, itemFilename);
-                            
+
                             const fileResponse = await axios.get(item.url, {
                                 responseType: 'stream',
                                 timeout: 120000
                             });
-                            
+
                             const writer = fs.createWriteStream(filePath);
                             fileResponse.data.pipe(writer);
-                            
+
                             await new Promise((resolve, reject) => {
                                 writer.on('finish', resolve);
                                 writer.on('error', reject);
                             });
-                            
+
                             downloadedFiles.push({
                                 path: filePath,
                                 type: item.type,
@@ -287,7 +380,7 @@ bot.on('message', async (msg) => {
                             console.error("Picker item yuklashda xato:", itemErr.message);
                         }
                     }
-                    
+
                     if (downloadedFiles.length === 0) {
                         bot.sendMessage(chatId, "Fayllarni yuklab olishda muammo yuzaga keldi.");
                     } else if (downloadedFiles.length === 1) {
@@ -308,7 +401,6 @@ bot.on('message', async (msg) => {
                         } catch (e) {
                             console.error("Bitta fayl yuborishda xato:", e.message);
                         }
-                        // Faylni o'chirish
                         try { fs.unlinkSync(downloadedFiles[0].path); } catch (e) {}
                     } else {
                         // Bir nechta fayl — media group qilib yuborish
@@ -322,7 +414,7 @@ bot.on('message', async (msg) => {
                                     parse_mode: idx === 0 ? 'HTML' : undefined
                                 };
                             });
-                            
+
                             await bot.sendMediaGroup(chatId, mediaGroup);
                         } catch (groupErr) {
                             console.error("Media group yuborishda xato:", groupErr.message);
@@ -346,7 +438,7 @@ bot.on('message', async (msg) => {
                                 }
                             }
                         }
-                        
+
                         // Barcha temp fayllarni o'chirish
                         for (const file of downloadedFiles) {
                             try { fs.unlinkSync(file.path); } catch (e) {}
