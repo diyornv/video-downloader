@@ -6,7 +6,7 @@ steps:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
-            cd /root/video-downloader-bot
+            cd /root/video-downloader
             git pull origin main
             npm install
             pm2 restart downloader-bot
