@@ -251,22 +251,105 @@ bot.on('message', async (msg) => {
                     // Tunnel — cobalt server orqali, avval yuklab keyin yuborish kerak
                     await downloadAndSend(data.url, data.filename, caption);
                 } else if (data.status === 'picker' && data.picker) {
-                    // Bir nechta rasm/video — hammasini yuborish
-                    let sent = 0;
-                    for (const item of data.picker) {
+                    // Bir nechta rasm/video — hammasini yuklab olib, media group qilib yuborish
+                    const tmpDir = path.join(__dirname, 'tmp');
+                    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir);
+                    
+                    const downloadedFiles = [];
+                    
+                    for (let i = 0; i < data.picker.length; i++) {
+                        const item = data.picker[i];
                         try {
-                            const itemFilename = `picker_${Date.now()}_${sent}${item.type === 'photo' ? '.jpg' : '.mp4'}`;
-                            const itemCaption = sent === 0 ? caption : '';
+                            const ext = item.type === 'photo' ? '.jpg' : '.mp4';
+                            const itemFilename = `picker_${Date.now()}_${i}${ext}`;
+                            const filePath = path.join(tmpDir, itemFilename);
                             
-                            // Picker itemlar ham tunnel orqali keladi
-                            await downloadAndSend(item.url, itemFilename, itemCaption);
-                            sent++;
+                            const fileResponse = await axios.get(item.url, {
+                                responseType: 'stream',
+                                timeout: 120000
+                            });
+                            
+                            const writer = fs.createWriteStream(filePath);
+                            fileResponse.data.pipe(writer);
+                            
+                            await new Promise((resolve, reject) => {
+                                writer.on('finish', resolve);
+                                writer.on('error', reject);
+                            });
+                            
+                            downloadedFiles.push({
+                                path: filePath,
+                                type: item.type,
+                                filename: itemFilename
+                            });
                         } catch (itemErr) {
-                            console.error("Picker item yuborishda xato:", itemErr.message);
+                            console.error("Picker item yuklashda xato:", itemErr.message);
                         }
                     }
-                    if (sent === 0) {
+                    
+                    if (downloadedFiles.length === 0) {
                         bot.sendMessage(chatId, "Fayllarni yuklab olishda muammo yuzaga keldi.");
+                    } else if (downloadedFiles.length === 1) {
+                        // Bitta fayl bo'lsa oddiy yuborish
+                        try {
+                            const file = downloadedFiles[0];
+                            if (isImageFile(file.filename)) {
+                                await bot.sendPhoto(chatId, file.path, {
+                                    caption: caption,
+                                    parse_mode: 'HTML'
+                                });
+                            } else {
+                                await bot.sendVideo(chatId, file.path, {
+                                    caption: caption,
+                                    parse_mode: 'HTML'
+                                });
+                            }
+                        } catch (e) {
+                            console.error("Bitta fayl yuborishda xato:", e.message);
+                        }
+                        // Faylni o'chirish
+                        try { fs.unlinkSync(downloadedFiles[0].path); } catch (e) {}
+                    } else {
+                        // Bir nechta fayl — media group qilib yuborish
+                        try {
+                            const mediaGroup = downloadedFiles.map((file, idx) => {
+                                const isImage = isImageFile(file.filename);
+                                return {
+                                    type: isImage ? 'photo' : 'video',
+                                    media: file.path,
+                                    caption: idx === 0 ? caption : '',
+                                    parse_mode: idx === 0 ? 'HTML' : undefined
+                                };
+                            });
+                            
+                            await bot.sendMediaGroup(chatId, mediaGroup);
+                        } catch (groupErr) {
+                            console.error("Media group yuborishda xato:", groupErr.message);
+                            // Fallback — bittadan yuborish
+                            for (let i = 0; i < downloadedFiles.length; i++) {
+                                try {
+                                    const file = downloadedFiles[i];
+                                    if (isImageFile(file.filename)) {
+                                        await bot.sendPhoto(chatId, file.path, {
+                                            caption: i === 0 ? caption : '',
+                                            parse_mode: 'HTML'
+                                        });
+                                    } else {
+                                        await bot.sendVideo(chatId, file.path, {
+                                            caption: i === 0 ? caption : '',
+                                            parse_mode: 'HTML'
+                                        });
+                                    }
+                                } catch (fallbackErr) {
+                                    console.error("Fallback yuborishda xato:", fallbackErr.message);
+                                }
+                            }
+                        }
+                        
+                        // Barcha temp fayllarni o'chirish
+                        for (const file of downloadedFiles) {
+                            try { fs.unlinkSync(file.path); } catch (e) {}
+                        }
                     }
                 } else {
                     console.error("Noma'lum API javobi:", JSON.stringify(data));
@@ -276,8 +359,15 @@ bot.on('message', async (msg) => {
                 console.error("API Xatosi:", error.message);
                 if (error.response) {
                     console.error("Server javobi:", JSON.stringify(error.response.data));
+                    const errCode = error.response.data?.error?.code;
+                    if (errCode === 'error.api.fetch.empty') {
+                        bot.sendMessage(chatId, "Bu kontentni yuklab bo'lmadi. Link yopiq yoki noto'g'ri bo'lishi mumkin.");
+                    } else {
+                        bot.sendMessage(chatId, "Faylni yuklab olishda xatolik yuz berdi. Iltimos keyinroq qayta urinib ko'ring.");
+                    }
+                } else {
+                    bot.sendMessage(chatId, "Server bilan ulanishda xatolik yuz berdi. Iltimos keyinroq qayta urinib ko'ring.");
                 }
-                bot.sendMessage(chatId, "Server bilan ulanishda xatolik yuz berdi. Iltimos keyinroq qayta urinib ko'ring.");
             }
         } else {
             bot.sendMessage(chatId, "Men faqat Instagram, TikTok, Pinterest va YouTube linklarini qabul qilaman.");
